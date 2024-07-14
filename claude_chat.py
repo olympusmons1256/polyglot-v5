@@ -15,7 +15,7 @@ import shutil
 # Constants
 API_KEY = os.getenv('CLAUDE_API_KEY')
 API_URL = "https://api.anthropic.com/v1/messages"
-GITHUB_REPO_URL = "https://github.com/olympusmons1256/polyglot-v4"
+GITHUB_REPO_URL = "https://github.com/olympusmons1256/polyglot-v5"
 DB_PATH = "conversation_notebook.db"
 CONTEXT_CHECK_INTERVAL = 3  # Number of turns before reminding Claude to check history
 
