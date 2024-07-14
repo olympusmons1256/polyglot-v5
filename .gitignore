@@ -1,1 +1,4 @@
+conversation_notebook.db
 __pycache__/
+*.pyc
+.env
