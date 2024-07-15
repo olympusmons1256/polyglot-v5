@@ -340,8 +340,9 @@ class UserLearningNetwork:
         relevant_loci = self.projects[project_name].get_relevant_loci(query)
         relevant_patterns = []
         for locus in relevant_loci:
-            for neighbor in self.cross_project_patterns.neighbors((project_name, locus)):
-                relevant_patterns.append(neighbor)
+            node = (project_name, locus)
+            if self.cross_project_patterns.has_node(node):
+                relevant_patterns.extend(self.cross_project_patterns.neighbors(node))
         return relevant_patterns
 
     def get_project_growth_pattern(self, project_name):
