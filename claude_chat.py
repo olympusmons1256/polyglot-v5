@@ -6,23 +6,176 @@ import numpy as np
 from scipy.sparse import vstack
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.cluster import KMeans
 from datetime import datetime
 from typing import List, Dict, Tuple
 import subprocess
 import re
 import shutil
+from github import Github
+from enum import Enum
+import math
+import networkx as nx
 
-# Constants
+# Global Variables and Constants
+DEBUG = False
 API_KEY = os.getenv('CLAUDE_API_KEY')
+GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 API_URL = "https://api.anthropic.com/v1/messages"
 GITHUB_REPO_URL = "https://github.com/olympusmons1256/polyglot-v5"
 DB_PATH = "conversation_notebook.db"
-CONTEXT_CHECK_INTERVAL = 3  # Number of turns before reminding Claude to check history
+CONTEXT_CHECK_INTERVAL = 3
 
 print(f"API Key found: {'Yes' if API_KEY else 'No'}")
+print(f"GitHub Token found: {'Yes' if GITHUB_TOKEN else 'No'}")
 
 if not API_KEY:
-    raise ValueError("CLAUDE_API_KEY environment variable is not set. Please set it and try again.")
+    raise ValueError("CLAUDE_API_KEY environment variable is not set.")
+if not GITHUB_TOKEN:
+    raise ValueError("GITHUB_TOKEN environment variable is not set.")
+
+class Shape(Enum):
+    SPIRAL = "Spiral"
+    FRACTAL = "Fractal"
+    BRANCHING = "Branching"
+    MESH = "Mesh"
+    LAYERED = "Layered"
+
+class PlantGrowthPattern(Enum):
+    VINE = ("Vine-like", Shape.SPIRAL)
+    TREE = ("Tree-like", Shape.BRANCHING)
+    BUSH = ("Bush-like", Shape.MESH)
+    SUCCULENT = ("Succulent-like", Shape.LAYERED)
+    RHIZOME = ("Rhizome-like", Shape.FRACTAL)
+
+    def __init__(self, label, shape):
+        self.label = label
+        self.shape = shape
+
+class MathComplexity:
+    def __init__(self):
+        self.operations = {}
+        self.total_complexity = 0
+
+    def add_operation(self, operation, count):
+        self.operations[operation] = self.operations.get(operation, 0) + count
+        self.calculate_total_complexity()
+
+    def calculate_total_complexity(self):
+        self.total_complexity = sum(math.factorial(count) for count in self.operations.values())
+
+class ProjectGrowthCharacteristics:
+    def __init__(self):
+        self.growth_rate = 0.01
+        self.structural_complexity = 0.01
+        self.interconnectedness = 0.01
+        self.resource_efficiency = 0.01
+        self.adaptability = 0.01
+        self.math_complexity = MathComplexity()
+        self.evolution_rate = 0.01
+
+class PlantGrowthTaxonomy:
+    def __init__(self):
+        self.patterns = {pattern: ProjectGrowthCharacteristics() for pattern in PlantGrowthPattern}
+        self._initialize_patterns()
+
+    def _initialize_patterns(self):
+        self.patterns[PlantGrowthPattern.VINE].growth_rate = 0.9
+        self.patterns[PlantGrowthPattern.VINE].structural_complexity = 0.3
+        self.patterns[PlantGrowthPattern.VINE].interconnectedness = 0.7
+        self.patterns[PlantGrowthPattern.VINE].resource_efficiency = 0.5
+        self.patterns[PlantGrowthPattern.VINE].adaptability = 0.8
+        self.patterns[PlantGrowthPattern.VINE].evolution_rate = 0.7
+
+        for pattern in PlantGrowthPattern:
+            if pattern != PlantGrowthPattern.VINE:
+                chars = self.patterns[pattern]
+                chars.growth_rate = np.random.rand()
+                chars.structural_complexity = np.random.rand()
+                chars.interconnectedness = np.random.rand()
+                chars.resource_efficiency = np.random.rand()
+                chars.adaptability = np.random.rand()
+                chars.evolution_rate = np.random.rand()
+
+    def match_pattern(self, project_characteristics):
+        similarities = {}
+        for pattern, ideal_chars in self.patterns.items():
+            similarity = self._calculate_similarity(project_characteristics, ideal_chars)
+            similarities[pattern] = similarity
+        return max(similarities, key=similarities.get)
+
+    def _calculate_similarity(self, project_characteristics, ideal_chars):
+        if DEBUG:
+            print("Project characteristics:", vars(project_characteristics))
+            print("Ideal characteristics:", vars(ideal_chars))
+        project_vector = np.array([
+            project_characteristics.growth_rate,
+            project_characteristics.structural_complexity,
+            project_characteristics.interconnectedness,
+            project_characteristics.resource_efficiency,
+            project_characteristics.adaptability,
+            project_characteristics.evolution_rate
+        ])
+        ideal_vector = np.array([
+            ideal_chars.growth_rate,
+            ideal_chars.structural_complexity,
+            ideal_chars.interconnectedness,
+            ideal_chars.resource_efficiency,
+            ideal_chars.adaptability,
+            ideal_chars.evolution_rate
+        ])
+        if DEBUG:
+            print("Project vector:", project_vector)
+            print("Ideal vector:", ideal_vector)
+        
+        if np.array_equal(project_vector, ideal_vector):
+            return 1.0
+        
+        with np.errstate(divide='ignore', invalid='ignore'):
+            corr_matrix = np.corrcoef(project_vector, ideal_vector)
+        
+        if np.isnan(corr_matrix).all():
+            return 0.0
+        elif corr_matrix.size == 1:
+            return corr_matrix.item()
+        else:
+            return corr_matrix[0, 1]
+
+class GitHubRepo:
+    def __init__(self, repo_url, update_threshold=10):
+        self.g = Github(GITHUB_TOKEN)
+        self.repo = self.g.get_repo(repo_url.split('github.com/')[-1])
+        self.file_structure = None
+        self.update_count = 0
+        self.update_threshold = update_threshold
+
+    def get_file_structure(self, force_update=False):
+        if self.file_structure is None or force_update or self.update_count >= self.update_threshold:
+            self.file_structure = self._fetch_file_structure()
+            self.update_count = 0
+        else:
+            self.update_count += 1
+        return self.file_structure
+
+    def _fetch_file_structure(self):
+        def traverse(contents, path=''):
+            structure = []
+            for content in contents:
+                if content.type == 'dir':
+                    structure.append(f"{path}{content.name}/")
+                    structure.extend(traverse(self.repo.get_contents(content.path), f"{path}{content.name}/"))
+                else:
+                    structure.append(f"{path}{content.name}")
+            return structure
+        
+        return traverse(self.repo.get_contents(""))
+
+    def get_file_content(self, file_path):
+        try:
+            content = self.repo.get_contents(file_path)
+            return content.decoded_content.decode()
+        except Exception as e:
+            return f"Error fetching file content: {str(e)}"
 
 class VectorNotebook:
     def __init__(self):
@@ -80,17 +233,148 @@ class VectorNotebook:
     def close(self):
         self.conn.close()
 
-def generate_instruction(vector_notebook: VectorNotebook, user_input: str, error_message: str = None) -> str:
-    relevant_entries = vector_notebook.get_relevant_entries(user_input)
+class ProjectLearningNode:
+    def __init__(self, project_name, n_clusters=10):
+        self.project_name = project_name
+        self.vector_notebook = VectorNotebook()
+        self.kmeans = KMeans(n_clusters=n_clusters)
+        self.loci = None
+        self.growth_characteristics = ProjectGrowthCharacteristics()
+        self.growth_pattern = None
+        self.taxonomy = PlantGrowthTaxonomy()
+        self.last_update_time = datetime.now()
+
+    def add_interaction(self, content, tags):
+        self.vector_notebook.add_entry(content, tags)
+        self._update_loci()
+        self._update_growth_characteristics(content, tags)
+        self._update_growth_pattern()
+        self._update_math_complexity(content)
+        self._update_evolution_rate()
+
+    def _update_loci(self):
+        if self.vector_notebook.vectors is not None and self.vector_notebook.vectors.shape[0] % 10 == 0:
+            self.loci = self.kmeans.fit_predict(self.vector_notebook.vectors.toarray())
+
+    def _update_growth_characteristics(self, content, tags):
+        self.growth_characteristics.growth_rate = max(0.01, self.growth_characteristics.growth_rate + (0.1 if "commit" in tags else 0))
+        self.growth_characteristics.adaptability = max(0.01, self.growth_characteristics.adaptability + (0.1 if "refactor" in tags else 0))
+        self.growth_characteristics.structural_complexity = max(0.01, self.growth_characteristics.structural_complexity + (0.1 if "class" in content.lower() else 0))
+        self.growth_characteristics.interconnectedness = max(0.01, self.growth_characteristics.interconnectedness + (0.1 if "import" in content.lower() else 0))
+        self.growth_characteristics.resource_efficiency = max(0.01, self.growth_characteristics.resource_efficiency + (0.1 if "optimize" in content.lower() else 0))
+
+        for attr in vars(self.growth_characteristics):
+            if isinstance(getattr(self.growth_characteristics, attr), (int, float)):
+                setattr(self.growth_characteristics, attr, min(getattr(self.growth_characteristics, attr), 1))
+
+    def _update_growth_pattern(self):
+        self.growth_pattern = self.taxonomy.match_pattern(self.growth_characteristics)
+
+    def _update_math_complexity(self, content):
+        operations = {
+            'addition': content.count('+'),
+            'multiplication': content.count('*'),
+            'exponentiation': content.count('**'),
+        }
+        for op, count in operations.items():
+            self.growth_characteristics.math_complexity.add_operation(op, count)
+
+    def _update_evolution_rate(self):
+        current_time = datetime.now()
+        time_diff = (current_time - self.last_update_time).total_seconds()
+        self.growth_characteristics.evolution_rate = (
+            self.growth_characteristics.math_complexity.total_complexity / time_diff
+            if time_diff > 0 else 0
+        )
+        self.last_update_time = current_time
+
+    def get_relevant_loci(self, query):
+        if self.loci is None:
+            return []
+        query_vector = self.vector_notebook.vectorizer.transform([query])
+        query_locus = self.kmeans.predict(query_vector.toarray())[0]
+        return [query_locus]
+
+    def compare_loci(self, other_loci):
+        if self.loci is None or other_loci is None:
+            return {}
+        similarities = {}
+        for i in range(self.kmeans.n_clusters):
+            for j in range(len(set(other_loci))):
+                locus1 = self.vector_notebook.vectors[self.loci == i].mean(axis=0)
+                locus2 = self.vector_notebook.vectors[other_loci == j].mean(axis=0)
+                similarity = cosine_similarity(locus1, locus2)[0][0]
+                similarities[(i, j)] = similarity
+        return similarities
+
+class UserLearningNetwork:
+    def __init__(self, username):
+        self.username = username
+        self.projects = {}
+        self.cross_project_patterns = nx.Graph()
+
+    def add_project(self, project_name):
+        if project_name not in self.projects:
+            self.projects[project_name] = ProjectLearningNode(project_name)
+
+    def add_interaction(self, project_name, content, tags):
+        if project_name not in self.projects:
+            self.add_project(project_name)
+        self.projects[project_name].add_interaction(content, tags)
+        self._update_cross_project_patterns(project_name)
+
+    def _update_cross_project_patterns(self, current_project):
+        current_loci = self.projects[current_project].loci
+        for project, node in self.projects.items():
+            if project != current_project:
+                similarities = node.compare_loci(current_loci)
+                for (locus1, locus2), similarity in similarities.items():
+                    if similarity > 0.7:
+                        self.cross_project_patterns.add_edge(
+                            (current_project, locus1),
+                            (project, locus2),
+                            weight=similarity
+                        )
+
+    def get_relevant_patterns(self, project_name, query):
+        relevant_loci = self.projects[project_name].get_relevant_loci(query)
+        relevant_patterns = []
+        for locus in relevant_loci:
+            for neighbor in self.cross_project_patterns.neighbors((project_name, locus)):
+                relevant_patterns.append(neighbor)
+        return relevant_patterns
+
+    def get_project_growth_pattern(self, project_name):
+        return self.projects[project_name].growth_pattern
+
+    def get_project_shape(self, project_name):
+        growth_pattern = self.projects[project_name].growth_pattern
+        return growth_pattern.shape if growth_pattern else None
+
+def generate_instruction(vector_notebook, user_input, github_repo, relevant_patterns, growth_pattern, shape, math_complexity, evolution_rate):
     instruction = f"Refer to the project at {GITHUB_REPO_URL}. "
     instruction += "Based on the following context and the current query, provide assistance:\n\n"
+    
+    relevant_entries = vector_notebook.get_relevant_entries(user_input)
     for entry in relevant_entries:
         instruction += f"Previous interaction (Relevance: {entry['similarity']:.2f}):\n"
         instruction += f"Content: {entry['content']}\n"
         instruction += f"Tags: {', '.join(entry['tags'])}\n\n"
+    
     instruction += f"Current query: {user_input}\n"
-    if error_message:
-        instruction += f"\nError message: {error_message}\n"
+    instruction += f"\nRepository structure:\n"
+    instruction += "\n".join(github_repo.get_file_structure())
+    instruction += f"\nCurrent project growth pattern: {growth_pattern.label if growth_pattern else 'Not determined'}\n"
+    instruction += f"Project shape: {shape.value if shape else 'Not determined'}\n"
+    instruction += f"Mathematical complexity: {math_complexity.total_complexity}\n"
+    instruction += f"Evolution rate: {evolution_rate}\n"
+    instruction += "Consider these factors when suggesting changes or improvements.\n"
+    
+    if relevant_patterns:
+        instruction += "\nRelevant patterns from other projects:\n"
+        for pattern in relevant_patterns:
+            instruction += f"- {pattern[0]}: Locus {pattern[1]}\n"
+    
     instruction += "\nIf you suggest code changes, please format your response as follows:\n"
     instruction += "1. Explain the changes.\n"
     instruction += "2. Specify the file path like this: File: `path/to/file.ext`\n"
@@ -212,17 +496,6 @@ def extract_deletions(response: str) -> Tuple[List[str], str]:
     
     return [d.strip() for d in deletions], commit_message
 
-def extract_error_message(response: str) -> str:
-    error_pattern = r"Error:|Failed to|Exception:"
-    error_match = re.search(error_pattern, response, re.IGNORECASE)
-    if error_match:
-        error_start = error_match.start()
-        error_end = response.find("\n\n", error_start)
-        if error_end == -1:
-            error_end = len(response)
-        return response[error_start:error_end].strip()
-    return None
-
 def delete_file_or_folder(path: str) -> None:
     try:
         if os.path.isfile(path):
@@ -318,13 +591,15 @@ def handle_code_changes(code: str, file_path: str, commit_message: str) -> None:
     else:
         print("Changes not applied.")
 
-def claude_chat():
-    print("Enter project name:")
-    project_name = input().strip()
-    vector_notebook = VectorNotebook()
+def claude_chat(user_learning_network, project_name):
+    global DEBUG
+    project_node = user_learning_network.projects[project_name]
+    vector_notebook = project_node.vector_notebook
+    github_repo = GitHubRepo(GITHUB_REPO_URL)
     
     print(f"Welcome to Claude Chat for project: {project_name}")
     print("Type 'exit' to end the conversation.")
+    print("Type 'debug on' to enable debug mode, 'debug off' to disable it.")
     print("To input multi-line messages or code blocks, use '###' on a new line to finish your input.")
     
     turn_counter = 0
@@ -335,19 +610,42 @@ def claude_chat():
             print("Goodbye!")
             vector_notebook.close()
             return
+        elif user_input.lower().strip() == 'debug on':
+            DEBUG = True
+            print("Debug mode enabled.")
+            continue
+        elif user_input.lower().strip() == 'debug off':
+            DEBUG = False
+            print("Debug mode disabled.")
+            continue
         
-        error_message = extract_error_message(user_input)
-        instruction = generate_instruction(vector_notebook, user_input, error_message)
+        user_learning_network.add_interaction(project_name, user_input, ["user_query"])
+        
+        relevant_patterns = user_learning_network.get_relevant_patterns(project_name, user_input)
+        growth_pattern = user_learning_network.get_project_growth_pattern(project_name)
+        shape = user_learning_network.get_project_shape(project_name)
+        math_complexity = project_node.growth_characteristics.math_complexity
+        evolution_rate = project_node.growth_characteristics.evolution_rate
+        
+        if DEBUG:
+            print(f"Growth Pattern: {growth_pattern}")
+            print(f"Shape: {shape}")
+            print(f"Math Complexity: {math_complexity.total_complexity}")
+            print(f"Evolution Rate: {evolution_rate}")
+        
+        instruction = generate_instruction(
+            vector_notebook, user_input, github_repo, relevant_patterns, 
+            growth_pattern, shape, math_complexity, evolution_rate
+        )
         
         if turn_counter % CONTEXT_CHECK_INTERVAL == 0:
-            instruction += "\nReminder: Please check the provided conversation history for relevant context before responding."
+            instruction += "\nReminder: Please check the provided conversation history, repository structure, and project characteristics for relevant context before responding."
         
         print("\nClaude: ")
         response = ask_claude(instruction)
-        print(response)  # Print the full response
+        print(response)
 
-        vector_notebook.add_entry(user_input, ["user_query"])
-        vector_notebook.add_entry(response, ["claude_response"])
+        user_learning_network.add_interaction(project_name, response, ["claude_response"])
         
         deletions, delete_commit_message = extract_deletions(response)
         if deletions:
@@ -362,5 +660,23 @@ def claude_chat():
         
         turn_counter += 1
 
+def main():
+    try:
+        user_network = UserLearningNetwork("example_user")
+        project_name = input("Enter project name: ").strip()
+        user_network.add_project(project_name)
+        claude_chat(user_network, project_name)
+    except KeyboardInterrupt:
+        print("\nProgram interrupted by user. Cleaning up...")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print("Closing database connections and performing final cleanup...")
+        for project in user_network.projects.values():
+            project.vector_notebook.close()
+        print("Cleanup complete. Goodbye!")
+
 if __name__ == "__main__":
-    claude_chat()
+    main()

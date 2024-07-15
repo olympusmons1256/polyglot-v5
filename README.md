@@ -1,18 +1,8 @@
-# Claude Chat Script
+# React + Vite
 
-This script provides an interactive interface to communicate with Claude, an AI assistant, while maintaining context awareness and providing version control integration.
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
-## Features
+Currently, two official plugins are available:
 
-- Interactive chat with Claude AI
-- Context-aware conversations using vector-based relevance scoring
-- Git integration for applying and committing code changes
-- File management capabilities (creating, updating, and deleting files)
-- Persistent conversation history
-- Multi-line input support
-
-## Prerequisites
-
-- Python 3.7 or higher
-- Git (for version control features)
-- Claude API key
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh

@@ -1,0 +1,4 @@
+{
+  // ... other configurations ...
+  "postCreateCommand": "pip install -r requirements.txt && bash .devcontainer/postCreateCommand.sh"
+}
