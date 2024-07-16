@@ -30,6 +30,7 @@ API_URL = "https://api.anthropic.com/v1/messages"
 GITHUB_REPO_URL = "https://github.com/olympusmons1256/polyglot-v5"
 DB_PATH = "conversation_notebook.db"
 CONTEXT_CHECK_INTERVAL = 3
+CLAUDE_MODEL = "claude-3-opus-20240229"
 
 print(f"API Key found: {'Yes' if API_KEY else 'No'}")
 print(f"GitHub Token found: {'Yes' if GITHUB_TOKEN else 'No'}")
@@ -466,12 +467,14 @@ def stop_spinner(spinner):
     spinner.stop()
     spinner.join()
 
+import tiktoken
+
 def count_tokens(text: str) -> int:
-    encoding = tiktoken.encoding_for_model("cl100k_base")
+    encoding = tiktoken.get_encoding("cl100k_base")
     return len(encoding.encode(text))
 
 def truncate_to_token_limit(text: str, max_tokens: int) -> str:
-    encoding = tiktoken.encoding_for_model("cl100k_base")
+    encoding = tiktoken.get_encoding("cl100k_base")
     tokens = encoding.encode(text)
     if len(tokens) <= max_tokens:
         return text
@@ -505,7 +508,7 @@ When you see these codes, expand them into natural language before formulating y
 
 Provide concise and relevant answers based on the expanded context."""
 
-def ask_claude(prompt: str, vector_notebook: VectorNotebook, model: str = "claude-3-sonnet-20240229"):
+def ask_claude(prompt: str, vector_notebook: VectorNotebook, model: str = CLAUDE_MODEL):
     recent_history = vector_notebook.get_conversation_history(limit=2)
     relevant_history = vector_notebook.search_conversation_history(prompt, n=1)
     
@@ -530,6 +533,8 @@ def ask_claude(prompt: str, vector_notebook: VectorNotebook, model: str = "claud
         "stream": False
     }
     
+    print(f"Sending data to Claude API: {json.dumps(data, indent=2)}")
+    
     spinner = start_spinner()
     try:
         spinner.update_status(f"Sending request to Claude ({model})")
@@ -543,6 +548,8 @@ def ask_claude(prompt: str, vector_notebook: VectorNotebook, model: str = "claud
         else:
             return "No content received from Claude."
     except requests.RequestException as e:
+        print(f"Error in API request: {e}")
+        print(f"Response content: {e.response.text if e.response else 'No response content'}")
         return f"Error in API request: {e}"
     finally:
         stop_spinner(spinner)
@@ -758,9 +765,11 @@ def claude_chat(user_learning_network, project_name):
         elif user_input.lower().startswith('switch model'):
             new_model = user_input.split('switch model', 1)[1].strip()
             if new_model:
-                print(f"Switched to model: {new_model}")
-            else:
-                print("Please specify a model name.")
+                global CLAUDE_MODEL
+            CLAUDE_MODEL = new_model
+            print(f"Switched to model: {CLAUDE_MODEL}")
+        else:
+            print("Please specify a model name.")
             continue
         
         spinner = start_spinner()
