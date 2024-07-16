@@ -16,8 +16,13 @@ from github import Github
 from enum import Enum
 import math
 import networkx as nx
+import sys
+import time
+import threading
+import tiktoken
+import hashlib
 
-# Global Variables and Constants
+# Constants
 DEBUG = False
 API_KEY = os.getenv('CLAUDE_API_KEY')
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
@@ -105,9 +110,6 @@ class PlantGrowthTaxonomy:
         return max(similarities, key=similarities.get)
 
     def _calculate_similarity(self, project_characteristics, ideal_chars):
-        if DEBUG:
-            print("Project characteristics:", vars(project_characteristics))
-            print("Ideal characteristics:", vars(ideal_chars))
         project_vector = np.array([
             project_characteristics.growth_rate,
             project_characteristics.structural_complexity,
@@ -124,9 +126,6 @@ class PlantGrowthTaxonomy:
             ideal_chars.adaptability,
             ideal_chars.evolution_rate
         ])
-        if DEBUG:
-            print("Project vector:", project_vector)
-            print("Ideal vector:", ideal_vector)
         
         if np.array_equal(project_vector, ideal_vector):
             return 1.0
@@ -177,12 +176,20 @@ class GitHubRepo:
         except Exception as e:
             return f"Error fetching file content: {str(e)}"
 
+    def get_relevant_files(self, query: str, n: int = 10):
+        all_files = self.get_file_structure()
+        scored_files = [(file, len(set(query.lower().split()) & set(file.lower().split('/')))) for file in all_files]
+        scored_files.sort(key=lambda x: x[1], reverse=True)
+        return [file for file, score in scored_files[:n]]
+
 class VectorNotebook:
     def __init__(self):
         self.conn = sqlite3.connect(DB_PATH)
         self.cursor = self.conn.cursor()
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS entries
                               (id INTEGER PRIMARY KEY, timestamp TEXT, content TEXT, tags TEXT, vector BLOB)''')
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS conversation_history
+                              (id INTEGER PRIMARY KEY, timestamp TEXT, role TEXT, content TEXT)''')
         self.vectorizer = TfidfVectorizer()
         self.vectors = None
         self.load_vectors()
@@ -230,8 +237,83 @@ class VectorNotebook:
                 })
         return relevant_entries
 
+    def add_conversation_entry(self, role: str, content: str):
+        timestamp = datetime.now().isoformat()
+        self.cursor.execute("""
+            INSERT INTO conversation_history (timestamp, role, content)
+            VALUES (?, ?, ?)
+        """, (timestamp, role, content))
+        self.conn.commit()
+
+    def get_conversation_history(self, limit: int = 10) -> List[Dict[str, str]]:
+        self.cursor.execute("""
+            SELECT role, content FROM conversation_history
+            ORDER BY timestamp DESC LIMIT ?
+        """, (limit,))
+        return [{"role": role, "content": content} for role, content in self.cursor.fetchall()][::-1]
+
+    def search_conversation_history(self, query: str, n: int = 5) -> List[Dict[str, str]]:
+        relevant_entries = self.get_relevant_entries(query, n)
+        return [{"role": "user" if "user_query" in entry["tags"] else "assistant",
+                 "content": entry["content"]} for entry in relevant_entries]
+
     def close(self):
         self.conn.close()
+
+class ContextCompressor:
+    def __init__(self):
+        self.vectorizer = TfidfVectorizer()
+        self.concept_codes = {}
+        self.context_store = {}
+        self.next_concept_code = 1
+        self.next_context_id = 1
+
+    def semantic_hash(self, text, hash_length=8):
+        vector = self.vectorizer.fit_transform([text]).toarray()[0]
+        hash_object = hashlib.sha256(vector.tobytes())
+        return hash_object.hexdigest()[:hash_length]
+
+    def extract_keywords(self, text, n=5):
+        tfidf = self.vectorizer.fit_transform([text])
+        feature_names = self.vectorizer.get_feature_names_out()
+        sorted_items = sorted(zip(tfidf.data, feature_names), key=lambda x: x[0], reverse=True)
+        return [item[1] for item in sorted_items[:n]]
+
+    def get_concept_code(self, concept):
+        if concept not in self.concept_codes:
+            self.concept_codes[concept] = f"C{self.next_concept_code}"
+            self.next_concept_code += 1
+        return self.concept_codes[concept]
+
+    def compress_file_path(self, path):
+        parts = path.split('/')
+        compressed = '/'.join([p[0] for p in parts[:-1]] + [parts[-1]])
+        return compressed
+
+    def store_context(self, context):
+        context_id = f"CTX{self.next_context_id}"
+        self.context_store[context_id] = context
+        self.next_context_id += 1
+        return context_id
+
+    def compress_instruction(self, instruction, max_tokens=300):
+        compressed = f"Q:{self.semantic_hash(instruction['query'])}\n"
+        compressed += f"K:{','.join(self.extract_keywords(instruction['query']))}\n"
+        
+        if 'project_summary' in instruction:
+            compressed += f"P:{self.get_concept_code(instruction['project_summary'])}\n"
+        
+        if 'relevant_context' in instruction:
+            context_id = self.store_context(instruction['relevant_context'])
+            compressed += f"RC:{context_id}\n"
+        
+        if 'relevant_file' in instruction:
+            compressed += f"F:{self.compress_file_path(instruction['relevant_file'])}\n"
+        
+        compressed += "Expand compressed context and provide a concise response."
+        return truncate_to_token_limit(compressed, max_tokens)
+
+context_compressor = ContextCompressor()
 
 class ProjectLearningNode:
     def __init__(self, project_name, n_clusters=10):
@@ -352,42 +434,89 @@ class UserLearningNetwork:
         growth_pattern = self.projects[project_name].growth_pattern
         return growth_pattern.shape if growth_pattern else None
 
-def generate_instruction(vector_notebook, user_input, github_repo, relevant_patterns, growth_pattern, shape, math_complexity, evolution_rate):
-    instruction = f"Refer to the project at {GITHUB_REPO_URL}. "
-    instruction += "Based on the following context and the current query, provide assistance:\n\n"
-    
-    relevant_entries = vector_notebook.get_relevant_entries(user_input)
-    for entry in relevant_entries:
-        instruction += f"Previous interaction (Relevance: {entry['similarity']:.2f}):\n"
-        instruction += f"Content: {entry['content']}\n"
-        instruction += f"Tags: {', '.join(entry['tags'])}\n\n"
-    
-    instruction += f"Current query: {user_input}\n"
-    instruction += f"\nRepository structure:\n"
-    instruction += "\n".join(github_repo.get_file_structure())
-    instruction += f"\nCurrent project growth pattern: {growth_pattern.label if growth_pattern else 'Not determined'}\n"
-    instruction += f"Project shape: {shape.value if shape else 'Not determined'}\n"
-    instruction += f"Mathematical complexity: {math_complexity.total_complexity}\n"
-    instruction += f"Evolution rate: {evolution_rate}\n"
-    instruction += "Consider these factors when suggesting changes or improvements.\n"
-    
-    if relevant_patterns:
-        instruction += "\nRelevant patterns from other projects:\n"
-        for pattern in relevant_patterns:
-            instruction += f"- {pattern[0]}: Locus {pattern[1]}\n"
-    
-    instruction += "\nIf you suggest code changes, please format your response as follows:\n"
-    instruction += "1. Explain the changes.\n"
-    instruction += "2. Specify the file path like this: File: `path/to/file.ext`\n"
-    instruction += "3. Provide the complete updated code wrapped in triple backticks.\n"
-    instruction += "4. Suggest a commit message prefixed with 'Commit: '\n"
-    instruction += "\nIf you suggest deleting files or folders, please format your response as follows:\n"
-    instruction += "1. Explain the deletions.\n"
-    instruction += "2. List each file or folder to be deleted, prefixed with 'Delete: '\n"
-    instruction += "3. Suggest a commit message prefixed with 'Commit: '\n"
-    return instruction
+class SpinnerThread(threading.Thread):
+    def __init__(self):
+        super().__init__(target=self._spin)
+        self.status = "Initializing"
+        self.spinning = True
 
-def ask_claude(prompt: str, conversation_history: List[Dict[str, str]] = []) -> str:
+    def _spin(self):
+        spinner_chars = "|/-\\"
+        while self.spinning:
+            for char in spinner_chars:
+                sys.stdout.write(f"\rClaude is thinking {char} | Status: {self.status}")
+                sys.stdout.flush()
+                time.sleep(0.1)
+
+    def update_status(self, new_status):
+        self.status = new_status
+
+    def stop(self):
+        self.spinning = False
+        sys.stdout.write("\rClaude: ")
+        sys.stdout.flush()
+
+def start_spinner():
+    spinner = SpinnerThread()
+    spinner.daemon = True
+    spinner.start()
+    return spinner
+
+def stop_spinner(spinner):
+    spinner.stop()
+    spinner.join()
+
+def count_tokens(text: str) -> int:
+    encoding = tiktoken.encoding_for_model("cl100k_base")
+    return len(encoding.encode(text))
+
+def truncate_to_token_limit(text: str, max_tokens: int) -> str:
+    encoding = tiktoken.encoding_for_model("cl100k_base")
+    tokens = encoding.encode(text)
+    if len(tokens) <= max_tokens:
+        return text
+    return encoding.decode(tokens[:max_tokens]) + "..."
+
+def generate_instruction(vector_notebook, user_input, github_repo, relevant_patterns, growth_pattern, shape, math_complexity, evolution_rate, max_tokens=300):
+    instruction = {
+        "query": user_input,
+        "project_summary": f"{growth_pattern.label if growth_pattern else 'Unknown'} growth, {shape.value if shape else 'Unknown'} shape, complexity {math_complexity.total_complexity:.2f}",
+    }
+
+    relevant_entries = vector_notebook.get_relevant_entries(user_input, n=1)
+    if relevant_entries:
+        instruction["relevant_context"] = relevant_entries[0]['content']
+
+    relevant_files = github_repo.get_relevant_files(user_input, n=1)
+    if relevant_files:
+        instruction["relevant_file"] = relevant_files[0]
+
+    return context_compressor.compress_instruction(instruction, max_tokens)
+
+CLAUDE_SYSTEM_MESSAGE = """You are an AI assistant working on a software project. You will receive messages in a compressed format. Here's how to interpret them:
+
+Q: Query hash
+K: Keywords
+P: Project summary code
+RC: Relevant context identifier
+F: Compressed file path
+
+When you see these codes, expand them into natural language before formulating your response. If you need more information about a specific context (RC), ask for it explicitly in your response.
+
+Provide concise and relevant answers based on the expanded context."""
+
+def ask_claude(prompt: str, vector_notebook: VectorNotebook, model: str = "claude-3-sonnet-20240229"):
+    recent_history = vector_notebook.get_conversation_history(limit=2)
+    relevant_history = vector_notebook.search_conversation_history(prompt, n=1)
+    
+    compressed_history = []
+    for message in recent_history + relevant_history:
+        compressed = context_compressor.compress_instruction({
+            "query": message['content'],
+            "role": message['role']
+        }, max_tokens=50)
+        compressed_history.append({"role": message['role'], "content": compressed})
+    
     headers = {
         "Content-Type": "application/json",
         "x-api-key": API_KEY,
@@ -395,22 +524,28 @@ def ask_claude(prompt: str, conversation_history: List[Dict[str, str]] = []) -> 
     }
     
     data = {
-        "model": "claude-3-sonnet-20240229",
-        "max_tokens": 4096,
-        "messages": conversation_history + [{"role": "user", "content": prompt}],
+        "model": model,
+        "max_tokens": 1000,
+        "messages": [{"role": "system", "content": CLAUDE_SYSTEM_MESSAGE}] + compressed_history + [{"role": "user", "content": prompt}],
         "stream": False
     }
     
+    spinner = start_spinner()
     try:
+        spinner.update_status(f"Sending request to Claude ({model})")
         response = requests.post(API_URL, json=data, headers=headers)
+        spinner.update_status("Processing Claude's response")
         response.raise_for_status()
         content = response.json()
         if 'content' in content and len(content['content']) > 0:
+            spinner.update_status("Preparing response")
             return content['content'][0]['text']
         else:
             return "No content received from Claude."
     except requests.RequestException as e:
         return f"Error in API request: {e}"
+    finally:
+        stop_spinner(spinner)
 
 def get_multi_line_input() -> str:
     print("Enter your message (type '###' on a new line to finish):")
@@ -601,6 +736,7 @@ def claude_chat(user_learning_network, project_name):
     print(f"Welcome to Claude Chat for project: {project_name}")
     print("Type 'exit' to end the conversation.")
     print("Type 'debug on' to enable debug mode, 'debug off' to disable it.")
+    print("Type 'switch model <model_name>' to change the Claude model.")
     print("To input multi-line messages or code blocks, use '###' on a new line to finish your input.")
     
     turn_counter = 0
@@ -619,45 +755,62 @@ def claude_chat(user_learning_network, project_name):
             DEBUG = False
             print("Debug mode disabled.")
             continue
+        elif user_input.lower().startswith('switch model'):
+            new_model = user_input.split('switch model', 1)[1].strip()
+            if new_model:
+                print(f"Switched to model: {new_model}")
+            else:
+                print("Please specify a model name.")
+            continue
         
-        user_learning_network.add_interaction(project_name, user_input, ["user_query"])
-        
-        relevant_patterns = user_learning_network.get_relevant_patterns(project_name, user_input)
-        growth_pattern = user_learning_network.get_project_growth_pattern(project_name)
-        shape = user_learning_network.get_project_shape(project_name)
-        math_complexity = project_node.growth_characteristics.math_complexity
-        evolution_rate = project_node.growth_characteristics.evolution_rate
-        
-        if DEBUG:
-            print(f"Growth Pattern: {growth_pattern}")
-            print(f"Shape: {shape}")
-            print(f"Math Complexity: {math_complexity.total_complexity}")
-            print(f"Evolution Rate: {evolution_rate}")
-        
-        instruction = generate_instruction(
-            vector_notebook, user_input, github_repo, relevant_patterns, 
-            growth_pattern, shape, math_complexity, evolution_rate
-        )
-        
-        if turn_counter % CONTEXT_CHECK_INTERVAL == 0:
-            instruction += "\nReminder: Please check the provided conversation history, repository structure, and project characteristics for relevant context before responding."
-        
-        print("\nClaude: ")
-        response = ask_claude(instruction)
-        print(response)
+        spinner = start_spinner()
+        try:
+            spinner.update_status("Updating project characteristics")
+            user_learning_network.add_interaction(project_name, user_input, ["user_query"])
+            vector_notebook.add_conversation_entry("user", user_input)
+            
+            spinner.update_status("Analyzing patterns")
+            relevant_patterns = user_learning_network.get_relevant_patterns(project_name, user_input)
+            growth_pattern = user_learning_network.get_project_growth_pattern(project_name)
+            shape = user_learning_network.get_project_shape(project_name)
+            math_complexity = project_node.growth_characteristics.math_complexity
+            evolution_rate = project_node.growth_characteristics.evolution_rate
+            
+            if DEBUG:
+                print(f"Growth Pattern: {growth_pattern}")
+                print(f"Shape: {shape}")
+                print(f"Math Complexity: {math_complexity.total_complexity}")
+                print(f"Evolution Rate: {evolution_rate}")
+            
+            spinner.update_status("Generating instruction for Claude")
+            instruction = generate_instruction(
+                vector_notebook, user_input, github_repo, relevant_patterns, 
+                growth_pattern, shape, math_complexity, evolution_rate
+            )
+            
+            if turn_counter % CONTEXT_CHECK_INTERVAL == 0:
+                instruction += "\nReminder: Please check the provided conversation history, repository structure, and project characteristics for relevant context before responding."
+            
+            spinner.update_status("Waiting for Claude's response")
+            response = ask_claude(instruction, vector_notebook)
+            print(response)
 
-        user_learning_network.add_interaction(project_name, response, ["claude_response"])
-        
-        deletions, delete_commit_message = extract_deletions(response)
-        if deletions:
-            handle_deletions(deletions, delete_commit_message)
-        
-        code_file_pairs = extract_code_and_file_path(response)
-        if code_file_pairs:
-            for code, file_path, commit_message in code_file_pairs:
-                handle_code_changes(code, file_path, commit_message)
-        elif not deletions:
-            print("\nNo specific code changes or deletions detected in Claude's response.")
+            spinner.update_status("Processing Claude's response")
+            user_learning_network.add_interaction(project_name, response, ["claude_response"])
+            vector_notebook.add_conversation_entry("assistant", response)
+            
+            deletions, delete_commit_message = extract_deletions(response)
+            if deletions:
+                handle_deletions(deletions, delete_commit_message)
+            
+            code_file_pairs = extract_code_and_file_path(response)
+            if code_file_pairs:
+                for code, file_path, commit_message in code_file_pairs:
+                    handle_code_changes(code, file_path, commit_message)
+            elif not deletions:
+                print("\nNo specific code changes or deletions detected in Claude's response.")
+        finally:
+            stop_spinner(spinner)
         
         turn_counter += 1
 
